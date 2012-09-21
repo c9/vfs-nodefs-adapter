@@ -116,11 +116,11 @@ module.exports = function(vfs, base) {
             callback = mode;
             mode = null;
         }
-        vfs.exec("mkdir", {args: ["-p", resolvePath(path)]}, callback);
+        vfs.execFile("mkdir", {args: ["-p", resolvePath(path)]}, callback);
     }
 
     function mkdir(path, callback) {
-        vfs.exec("mkdir", {args: [resolvePath(path)]}, callback);
+        vfs.execFile("mkdir", {args: [resolvePath(path)]}, callback);
     }
 
     function rmfile(path, callback) {
