@@ -1,17 +1,33 @@
+( // Module boilerplate to support browser globals, node.js and AMD.
+  (typeof module !== "undefined" && function (m) { module.exports = m(require('stream'), require('events'), require('smith')); }) ||
+  (typeof define === "function" && function (m) { define(["smith", "lib/vfs-socket/stream-amd"], m); }) ||
+  (function (m) { window.consumer = m(window.stream, window.events, window.smith); })
+)(function (stream, events, smith) {
+    
+const PATH = { 
+    join : function(){
+        return Array.prototype.join.apply(arguments, ["/"]).replace(/\/\/+/, "/");
+    }
+};
 
-const PATH = require("path");
-const Stream = require("stream").Stream;
+if (typeof module == "undefined")
+    var Stream = require("lib/vfs-socket/stream-amd").Stream;
+else 
+    var Stream = require("stream").Stream;
 
-module.exports = function(vfs, base) {
+var exports = function(vfs, base, baseProc) {
 
-    var resolvePath = base 
-        ? function(path) { 
-	        if (path.substring(0, base.length) === base) {
-	            return path;
-	        }
-			return PATH.join(base, path);
-		}
-        : function(path) { return path; };
+    var resolvePath = function(path, basePath) { 
+        if (!basePath)
+            basePath = base;
+        
+        if (!basePath) return path;
+        
+        if (path.substring(0, basePath.length) === basePath) {
+            return path;
+        }
+        return PATH.join(basePath, path);
+    }
 
     function readFile(path, encoding, callback) {
         if (!callback) {
@@ -79,7 +95,7 @@ module.exports = function(vfs, base) {
             var files = [];
 
             stream.on("data", function(stat) {
-                files.push(stat.name);
+                files.push(stat);
             });
 
             var called;
@@ -99,7 +115,7 @@ module.exports = function(vfs, base) {
 
     function exists(path, callback) {
         vfs.stat(resolvePath(path), {}, function(err, stat) {
-            return callback(stat && !stat.err);
+            return callback(stat && !stat.err ? true : false, stat);
         });
     }
 
@@ -111,16 +127,27 @@ module.exports = function(vfs, base) {
         vfs.rename(resolvePath(to), {from: resolvePath(from)}, callback);
     }
 
+    function mkdirHandler(callback){
+        return function(err){
+            if (err && err.message.indexOf("exists") > -1)
+                callback({"code": "EEXIST", "message": err.message});
+            else
+                callback();
+        }
+    }
+
     function mkdirP(path, mode, callback) {
         if (!callback) {
             callback = mode;
             mode = null;
         }
-        vfs.execFile("mkdir", {args: ["-p", resolvePath(path)]}, callback);
+        vfs.execFile("mkdir", {args: ["-p", resolvePath(path, baseProc)]}, 
+            mkdirHandler(callback));
     }
 
     function mkdir(path, callback) {
-        vfs.execFile("mkdir", {args: [resolvePath(path)]}, callback);
+        vfs.execFile("mkdir", {args: [resolvePath(path, baseProc)]}, 
+            mkdirHandler(callback));
     }
 
     function rmfile(path, callback) {
@@ -128,7 +155,56 @@ module.exports = function(vfs, base) {
     }
 
     function rmdir(path, options, callback) {
+        if (typeof options == "function") {
+            callback = options;
+            options = {};
+        }
         vfs.rmdir(resolvePath(path), options, callback || function(){});
+    }
+    
+    function copy(path, to, options, callback){
+        if (typeof options == "function") {
+            callback  = options;
+            options = {};
+        }
+        
+        vfs.copy(resolvePath(path), {
+            to        : resolvePath(to), 
+            overwrite : (options.overwrite !== undefined 
+                ? options.overwrite 
+                : true),
+            recursive : options.recursive
+        }, callback);
+    }
+    
+    function symlink(path, target, callback){
+        vfs.symlink(resolvePath(path), {target: resolvePath(target)}, callback);
+    }
+    
+    function watch(path, callback) {
+        vfs.watch(resolvePath(path), {}, function (err, meta) {
+            if (err) return callback(err);
+            
+            var watcher = meta.watcher;
+            watcher.on("change", function (event, filename) {
+                callback(null, event, filename);
+            });
+            watcher.on("error", function(err){
+                callback(err || true);
+            })
+            
+            if (callback[path]) callback[path]();
+            callback[path] = function(){
+                watcher.removeAllListeners();
+                watcher.close();
+            };
+            
+            callback(null, "init", path);
+        });
+    }
+    
+    function unwatch(path, callback) {
+        if (callback[path]) callback[path]();
     }
 
     return {
@@ -143,6 +219,14 @@ module.exports = function(vfs, base) {
         unlink: rmfile,
         rmfile: rmfile,
         rmdir: rmdir,
+        copy: copy,
+        symlink: symlink,
+        watch: watch,
+        unwatch: unwatch,
         vfs: vfs
     }
 }
+
+return exports;
+
+});
